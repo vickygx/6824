@@ -2,6 +2,7 @@
 # Just create 6.824/api.key with your API key in it, 
 # and submit your lab with the following command: 
 #     $ make [lab1|lab2a|lab2b|lab3a|lab3b|lab4a|lab4b|lab5]
+# test comment
 
 KEY=$(shell cat api.key)
 LABS=" lab1 lab2a lab2b lab3a lab3b lab4a lab4b lab5 "
