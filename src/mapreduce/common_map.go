@@ -25,6 +25,7 @@ func doMap(
 	nReduce int, // the number of reduce task that will be run ("R" in the paper)
 	mapF func(file string, contents string) []KeyValue,
 ) {
+	// fmt.Println("infile", inFile)
 	var contentsByte, err = ioutil.ReadFile(inFile)
 	check_err(err)
 	kvpairs := mapF(inFile, string(contentsByte))
@@ -44,6 +45,7 @@ func doMap(
 
 	// Loop through filenames and create
     for filename := range filename_to_kv {
+    	// fmt.Println(filename)
     	f, err := os.Create(filename)
 		defer f.Close()
 		check_err(err)
