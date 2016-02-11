@@ -2,6 +2,7 @@ package mapreduce
 
 import (
 	"fmt"
+	"math"
 	"sync"
 )
 
@@ -27,132 +28,75 @@ func (mr *Master) schedule(phase jobPhase) {
 		ntasks = mr.nReduce
 		nios = len(mr.files)
 	}
-
-	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
-
 	// All ntasks tasks have to be scheduled on workers, and only once all of
 	// them have been completed successfully should the function return.
 	// Remember that workers may fail, and that any given worker may finish
 	// multiple tasks.
-	//
-	// TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO
-	//
+
+	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
 	
-	// available workers to take up tasks
-	var available = safeStringSet{m: make(map[string]struct{})}
+	completed_tasks := make(map[int]struct{})
+	task_to_worker := make(map[int]string)
+	
+	// Putting all tasks that need to be completed onto tasks channel
+	tasks := make(chan int, ntasks)
+	for i:= 0; i < ntasks; i++ {
+		tasks <- i
+	}
 
-	// in-progress tasks
-	var in_progress = safeMap{m: make(map[int]struct{})}
+	// Channel that receives completed tasks
+	completed := make(chan int)
+	free := make(chan string, int(math.Max(float64(len(mr.workers)), 2)))
 
-	// tasks that were assigned but failed
-	var failed = safeMap{m: make(map[int]struct{})}
-
-	var next_task = struct{
-		mux sync.RWMutex
-		v int
-	}{v: 0}
-
-	for _, wrk := range mr.workers {
-		available.m[wrk] = struct{}{}
+	// Put current free workers onto the queue
+	for _,worker := range mr.workers {
+		free <- worker
 	}
 
 	for {
+		next_worker := ""
 		select {
-		// Case 1: Process new worker registrations if they exist
-		case wker := <- mr.registerChannel:
-			fmt.Printf("[Added] worker %v to list\n", wker)
-			mr.workers = append(mr.workers, wker)
-			available.mux.Lock()
-			available.m[wker] = struct{}{}
-			available.mux.Unlock()
-		// Otherwise: Appoint leftover tasks to current workers
-		default:
-			// If all tasks have completed
-			in_progress.mux.RLock()
-			failed.mux.RLock()
-			next_task.mux.RLock()
-			num_failed := len(failed.m)
-			no_more_tasks := next_task.v == ntasks
+		case next_worker = <-mr.registerChannel:
+			mr.workers = append(mr.workers, next_worker)
+			
+		case completed_task := <-completed:
+			completed_tasks[completed_task] = struct{}{}
+			next_worker = task_to_worker[completed_task]
+			delete(task_to_worker, completed_task)
 
-			if no_more_tasks && len(in_progress.m) == 0 && num_failed == 0{
-				next_task.mux.RUnlock()
-				failed.mux.RUnlock()
-				in_progress.mux.RUnlock()
+		case next_worker = <-free:
+		default:
+			if len(completed_tasks) == ntasks {
 				return
 			}
-			// fmt.Printf("Here 2\n")
-			next_task.mux.RUnlock()
-			failed.mux.RUnlock()
-			in_progress.mux.RUnlock()
+		}
 
-			if num_failed > 0 || !no_more_tasks {
-				// fmt.Printf("Here 3\n")
-				// Pick a random free worker to assign a task to
-				available.mux.Lock()
-				var worker string
-				for key, _ := range available.m {
-					worker = key
-					delete(available.m, key)
-					break
+		// If there is a next available worker and task, assign
+		if next_worker != "" {
+			select {
+			case next_task := <- tasks:
+				task_to_worker[next_task] = next_worker
+				do_task_args := DoTaskArgs{JobName:mr.jobName, File: mr.files[next_task], Phase:phase, 
+									   TaskNumber:next_task, NumOtherPhase:nios }
+				go appointTask(next_worker, &do_task_args, completed, free, tasks)
+			default:
+				if len(completed_tasks) == ntasks {
+					return
 				}
-				available.mux.Unlock()
-
-				// fmt.Printf("Here 4\n")
-				if worker != "" {
-					// Pick the next task
-					task := -1;
-					if len(failed.m) > 0 {
-						failed.mux.Lock()
-						for key, _ := range failed.m {
-							task = key
-							delete(failed.m, key)
-							break
-						}
-						failed.mux.Unlock()
-					} else {
-						next_task.mux.Lock()
-						task = next_task.v
-						next_task.v++
-						next_task.mux.Unlock()
-					}
-
-					if task >= 0 && task < ntasks {
-						in_progress.mux.Lock()
-						in_progress.m[task] = struct{}{}
-						in_progress.mux.Unlock()
-
-						do_task_args := DoTaskArgs{JobName:mr.jobName, File: mr.files[task], Phase:phase, 
-												   TaskNumber:task, NumOtherPhase:nios }
-						
-						go appointTask(worker, &do_task_args, &available, &in_progress, &failed)
-					}
-				}
-			}
-			
+			}	
 		}
 	}
+
 }
 
 func appointTask(worker string, taskArgs *DoTaskArgs, 
-				 available *safeStringSet,
-				 in_progress *safeMap, 
-				 failed *safeMap) {
+				 completed chan int,  free chan string, tasks chan int) {
 	ok := call(worker, "Worker.DoTask", taskArgs, new(struct{})) 
-
-	// Add worker back to available
-	available.mux.Lock()
-	available.m[worker] = struct{}{}
-	available.mux.Unlock()
-
-	// Remove task from in-progress
-	in_progress.mux.Lock()
-	delete(in_progress.m, taskArgs.TaskNumber)
-	in_progress.mux.Unlock()
 	
-	// Add task to failed
-	if ok == false {
-		failed.mux.Lock()
-		failed.m[taskArgs.TaskNumber] = struct{}{}
-		failed.mux.Unlock()
+	if ok {
+		completed <- taskArgs.TaskNumber
+	} else {
+		tasks <- taskArgs.TaskNumber
+		free <- worker
 	}
 }
