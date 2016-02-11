@@ -36,7 +36,6 @@ func (mr *Master) schedule(phase jobPhase) {
 	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
 	
 	completed_tasks := make(map[int]struct{})
-	task_to_worker := make(map[int]string)
 	
 	// Putting all tasks that need to be completed onto tasks channel
 	tasks := make(chan int, ntasks)
@@ -53,21 +52,26 @@ func (mr *Master) schedule(phase jobPhase) {
 		free <- worker
 	}
 
+	next_worker := ""
 	for {
-		next_worker := ""
+		// Counting completed tasks
 		select {
-		case next_worker = <-mr.registerChannel:
-			mr.workers = append(mr.workers, next_worker)
-			
-		case completed_task := <-completed:
+		case completed_task := <- completed:
 			completed_tasks[completed_task] = struct{}{}
-			next_worker = task_to_worker[completed_task]
-			delete(task_to_worker, completed_task)
-
-		case next_worker = <-free:
 		default:
-			if len(completed_tasks) == ntasks {
-				return
+		}
+
+		// Setting up next worker
+		if next_worker == "" {
+			select {
+			case next_worker = <-mr.registerChannel:
+				mr.workers = append(mr.workers, next_worker)
+				
+			case next_worker = <-free:
+			default:
+				if len(completed_tasks) == ntasks {
+					return
+				}
 			}
 		}
 
@@ -75,10 +79,10 @@ func (mr *Master) schedule(phase jobPhase) {
 		if next_worker != "" {
 			select {
 			case next_task := <- tasks:
-				task_to_worker[next_task] = next_worker
 				do_task_args := DoTaskArgs{JobName:mr.jobName, File: mr.files[next_task], Phase:phase, 
 									   TaskNumber:next_task, NumOtherPhase:nios }
 				go appointTask(next_worker, &do_task_args, completed, free, tasks)
+				next_worker = ""
 			default:
 				if len(completed_tasks) == ntasks {
 					return
@@ -92,11 +96,10 @@ func (mr *Master) schedule(phase jobPhase) {
 func appointTask(worker string, taskArgs *DoTaskArgs, 
 				 completed chan int,  free chan string, tasks chan int) {
 	ok := call(worker, "Worker.DoTask", taskArgs, new(struct{})) 
-	
 	if ok {
 		completed <- taskArgs.TaskNumber
 	} else {
 		tasks <- taskArgs.TaskNumber
-		free <- worker
 	}
+	free <- worker
 }
