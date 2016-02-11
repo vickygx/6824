@@ -1,6 +1,7 @@
 package mapreduce
 
 import (
+	"io"
 	"os"
 	"encoding/json"
 	"sort"
@@ -23,19 +24,19 @@ func doReduce(
 	for i := 0; i < nMap; i++ {
 		filename := reduceName(jobName, i, reduceTaskNumber)
 		f, err := os.Open(filename)
-		defer f.Close()
 		check_err(err)
 
 		decoder := json.NewDecoder(f)
 
-		// For each KeyValue pair in the file, add it to the map
-		for decoder.More() {
-			var kv KeyValue 
-			err := decoder.Decode(&kv)
-			check_err(err)
-
-			keyToValues[kv.Key] = append(keyToValues[kv.Key], kv.Value)
+		for {
+			var kv KeyValue
+			if err := decoder.Decode(&kv); err == io.EOF {
+				break
+			} else if err == nil {
+				keyToValues[kv.Key] = append(keyToValues[kv.Key], kv.Value)	
+			}	
 		}
+		f.Close()
 	}
 
 	// Merge all content together under one key in sorted order
