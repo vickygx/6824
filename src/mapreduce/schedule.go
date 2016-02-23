@@ -2,7 +2,7 @@ package mapreduce
 
 import (
 	"fmt"
-	// "math"
+	"math"
 	"sync"
 )
 
@@ -35,29 +35,21 @@ func (mr *Master) schedule(phase jobPhase) {
 
 	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
 	
-	// Variables
 	completed_tasks := make(map[int]struct{})
 	
-	// Channels
-	tasks := make(chan int, ntasks)
-	completed := make(chan int)
-	
 	// Putting all tasks that need to be completed onto tasks channel
+	tasks := make(chan int, ntasks)
 	for i:= 0; i < ntasks; i++ {
 		tasks <- i
-	}	
+	}
+
+	// Channel that receives completed tasks
+	completed := make(chan int)
+	free := make(chan string, int(math.Max(float64(len(mr.workers)), 2)))
 
 	// Put current free workers onto the queue
 	for _,worker := range mr.workers {
-		select {
-		case next_task := <- tasks:
-			do_task_args := DoTaskArgs{JobName:mr.jobName, File: mr.files[next_task], Phase:phase, 
-									   TaskNumber:next_task, NumOtherPhase:nios }
-			go appointTask(worker, &do_task_args, completed, mr.registerChannel, tasks)
-		default:
-			go registerWorker(worker, mr.registerChannel)
-		}
-		
+		free <- worker
 	}
 
 	next_worker := ""
@@ -74,6 +66,8 @@ func (mr *Master) schedule(phase jobPhase) {
 			select {
 			case next_worker = <-mr.registerChannel:
 				mr.workers = append(mr.workers, next_worker)
+				
+			case next_worker = <-free:
 			default:
 				if len(completed_tasks) == ntasks {
 					return
@@ -87,7 +81,7 @@ func (mr *Master) schedule(phase jobPhase) {
 			case next_task := <- tasks:
 				do_task_args := DoTaskArgs{JobName:mr.jobName, File: mr.files[next_task], Phase:phase, 
 									   TaskNumber:next_task, NumOtherPhase:nios }
-				go appointTask(next_worker, &do_task_args, completed, mr.registerChannel, tasks)
+				go appointTask(next_worker, &do_task_args, completed, free, tasks)
 				next_worker = ""
 			default:
 				if len(completed_tasks) == ntasks {
@@ -99,17 +93,13 @@ func (mr *Master) schedule(phase jobPhase) {
 
 }
 
-func registerWorker(worker string, register chan string) {
-	register <- worker
-}
-
 func appointTask(worker string, taskArgs *DoTaskArgs, 
-				 completed chan int,  register chan string, tasks chan int) {
+				 completed chan int,  free chan string, tasks chan int) {
 	ok := call(worker, "Worker.DoTask", taskArgs, new(struct{})) 
 	if ok {
 		completed <- taskArgs.TaskNumber
 	} else {
 		tasks <- taskArgs.TaskNumber
 	}
-	register <- worker
+	free <- worker
 }

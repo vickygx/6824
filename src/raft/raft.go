@@ -501,6 +501,10 @@ func (rf *Raft) mainThread() { // have a peer thread between each peer. might be
 // to keep the log updated with commited (while loop for exiting. and is leader)
 
 
+// can use defer done() function
+// can use wg sync.WaitGroup
+// defer wg.Done()
+// wg.Wait()
 func (rf *Raft) convertToFollower() {
-	
+
 }
